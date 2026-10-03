@@ -1,45 +1,139 @@
 {
-    "name": "nanodump",
-    "version": "0.0.0",
-    "command_name": "nanodump",
-    "extension_author": "@moloch--",
-    "original_author": "@HelpSystems",
-    "repo_url": "https://github.com/sliverarmory/nanodump",
-    "help": "A Beacon Object File that creates a minidump of the LSASS process.",
-    "depends_on": "coff-loader",
-    "entrypoint": "go",
-    "files": [
-        {
-            "os": "windows",
-            "arch": "amd64",
-            "path": "nanodump.x64.o"
-        }
-    ],
-    "arguments": [
-        {
-            "name": "pid",
-            "desc": "The PID of the process you want to dump.",
-            "type": "int",
-            "optional": false
-        },
-        {
-            "name": "dump-name",
-            "desc": "The name of the dump file.",
-            "type": "string",
-            "optional": false
-        },
-        {
-            "name": "write-file",
-            "desc": "1 = write file, 0 = fileless",
-            "type": "int",
-            "optional": false
-        },
-        {
-            "name": "signature",
-            "desc": "Signature used for evasion, PMDM = default",
-            "type": "string",
-            "optional": false
-        }
-    ]
+  "name": "nanodump",
+  "version": "0.0.0",
+  "command_name": "nanodump",
+  "extension_author": "@moloch--",
+  "original_author": "Fortra",
+  "repo_url": "https://github.com/sliverarmory/nanodump",
+  "help": "Dump LSASS or inspect its PID with NanoDump",
+  "entrypoint": "go",
+  "files": [
+    {
+      "os": "windows",
+      "arch": "amd64",
+      "path": "nanodump.x64.o"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "pid",
+      "desc": "LSASS PID; 0 discovers it automatically",
+      "type": "int",
+      "optional": true
+    },
+    {
+      "name": "dump-path",
+      "desc": "Dump name or full path for file output",
+      "type": "string",
+      "optional": true,
+      "default": "nanodump.dmp"
+    },
+    {
+      "name": "write-file",
+      "desc": "Write a dump to disk (1); fileless callbacks are unsupported by Sliver",
+      "type": "int",
+      "optional": true,
+      "default": 1
+    },
+    {
+      "name": "chunk-size",
+      "desc": "Fileless output chunk size in bytes",
+      "type": "int",
+      "optional": true,
+      "default": 921600
+    },
+    {
+      "name": "valid-sig",
+      "desc": "Use a valid minidump signature (1); 0 needs signature restoration",
+      "type": "int",
+      "optional": true,
+      "default": 1
+    },
+    {
+      "name": "fork",
+      "desc": "Fork LSASS before dumping (0 or 1)",
+      "type": "int",
+      "optional": true
+    },
+    {
+      "name": "snapshot",
+      "desc": "Snapshot LSASS before dumping (0 or 1)",
+      "type": "int",
+      "optional": true
+    },
+    {
+      "name": "duplicate",
+      "desc": "Duplicate an existing LSASS handle (0 or 1)",
+      "type": "int",
+      "optional": true
+    },
+    {
+      "name": "elevate-handle",
+      "desc": "Elevate an LSASS handle (0 or 1)",
+      "type": "int",
+      "optional": true
+    },
+    {
+      "name": "duplicate-elevate",
+      "desc": "Duplicate and elevate an LSASS handle (0 or 1)",
+      "type": "int",
+      "optional": true
+    },
+    {
+      "name": "getpid",
+      "desc": "Print the LSASS PID without dumping (0 or 1)",
+      "type": "int",
+      "optional": true
+    },
+    {
+      "name": "seclogon-local",
+      "desc": "Use the local seclogon leak (0 or 1)",
+      "type": "int",
+      "optional": true
+    },
+    {
+      "name": "seclogon-remote",
+      "desc": "Use the remote seclogon leak (0 or 1)",
+      "type": "int",
+      "optional": true
+    },
+    {
+      "name": "seclogon-binary",
+      "desc": "Target path to a matching EXE staged before seclogon-local use",
+      "type": "string",
+      "optional": true
+    },
+    {
+      "name": "seclogon-duplicate",
+      "desc": "Duplicate the seclogon handle (0 or 1)",
+      "type": "int",
+      "optional": true
+    },
+    {
+      "name": "spoof-callstack",
+      "desc": "Spoof the call stack (0 or 1)",
+      "type": "int",
+      "optional": true
+    },
+    {
+      "name": "silent-process-exit",
+      "desc": "Use SilentProcessExit dumping (0 or 1)",
+      "type": "int",
+      "optional": true
+    },
+    {
+      "name": "silent-process-exit-path",
+      "desc": "Directory for SilentProcessExit output",
+      "type": "string",
+      "optional": true
+    },
+    {
+      "name": "shtinkering",
+      "desc": "Use Shtinkering (1); set write-file and valid-sig to 0",
+      "type": "int",
+      "optional": true
+    }
+  ],
+  "long_help": "The arguments match the upstream NanoDump BOF ABI. Use --getpid 1 to print the LSASS PID without creating a dump. Standard dumps default to disk output and a valid signature. Sliver does not reconstruct NanoDump's Cobalt Strike fileless callbacks. The seclogon-local technique needs a matching NanoDump EXE staged on the target before invoking this BOF. Other modes and their prerequisites are documented in the upstream README.",
+  "bof_executor": "reflektor"
 }
-

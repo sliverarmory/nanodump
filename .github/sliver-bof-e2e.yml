@@ -1,0 +1,44 @@
+schema: sliver-bof-e2e/v1
+
+sliver:
+  version: 422044af0dbfd75e4588756f9c7a4e3536eba376
+
+defaults:
+  bof_executor: reflektor
+  entrypoint: go
+  modes: [session, beacon]
+  command_timeout: 2m
+
+suites:
+  - name: windows-amd64
+    target:
+      os: windows
+      arch: amd64
+    tests:
+      - name: resolve-lsass-pid
+        object: build/nanodump.x64.o
+        # Keep this order aligned with NanoDump.cna's bof_pack format and
+        # source/entry.c's BeaconData* reads. getpid exits before dumping.
+        args:
+          - {type: int, value: 0}                 # pid: discover LSASS
+          - {type: string, value: unused.dmp}     # dump path
+          - {type: int, value: 0}                 # write to disk
+          - {type: int, value: 921600}            # chunk size
+          - {type: int, value: 0}                 # valid signature
+          - {type: int, value: 0}                 # fork
+          - {type: int, value: 0}                 # snapshot
+          - {type: int, value: 0}                 # duplicate handle
+          - {type: int, value: 0}                 # elevate handle
+          - {type: int, value: 0}                 # duplicate and elevate
+          - {type: int, value: 1}                 # get PID and leave
+          - {type: int, value: 0}                 # seclogon leak local
+          - {type: int, value: 0}                 # seclogon leak remote
+          - {type: string, value: ''}             # seclogon binary path
+          - {type: int, value: 0}                 # seclogon duplicate
+          - {type: int, value: 0}                 # spoof call stack
+          - {type: int, value: 0}                 # silent process exit
+          - {type: string, value: ''}             # silent process exit path
+          - {type: int, value: 0}                 # shtinkering
+        expect:
+          output:
+            matches: ['LSASS PID: [1-9][0-9]*']

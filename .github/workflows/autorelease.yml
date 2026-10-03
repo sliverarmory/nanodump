@@ -1,62 +1,240 @@
-name: Release
+name: Build, test, and release NanoDump
 
-on:
+"on":
+  pull_request:
   push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
-    branches: ["main"]
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
 
 jobs:
-
-  linux-windows-build:
-    name: MinGW Build
-    if: startsWith( github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+  build:
+    name: Build unsigned Armory package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
 
-    - name: OS Packages 
-      run: |
-        sudo apt-get update --fix-missing && sudo apt-get -y install \
-        git build-essential zlib1g zlib1g-dev wget zip unzip \
-        mingw-w64 binutils-mingw-w64 g++-mingw-w64 gcc-multilib
+      - name: Select package version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=v0.0.0
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Tag is not an exact package version: $GITHUB_REF_NAME" >&2
+              exit 1
+            fi
+            version="$GITHUB_REF_NAME"
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
-    - name: Minisign
-      run: |
-        MINISIGN_TMP=`mktemp -d`
-        cd $MINISIGN_TMP
-        wget https://github.com/aead/minisign/releases/download/v0.2.0/minisign-linux-amd64.tar.gz
-        tar xvf minisign-linux-amd64.tar.gz
-        mv ./minisign ~/minisign
+      - name: Install MinGW cross-compiler
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
 
-    - name: Check out code into the Go module directory
-      uses: actions/checkout@v2
+      - name: Build and validate unsigned package
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/package-armory.sh "$PACKAGE_VERSION"
+          sha256sum build/nanodump.x64.o build/extension.json build/nanodump.tar.gz
 
-    - name: Git Fetch Tags
-      run: git fetch --prune --unshallow --tags -f
+      - name: Upload exact unsigned build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nanodump-unsigned
+          path: |
+            build/nanodump.x64.o
+            build/extension.json
+            build/nanodump.tar.gz
+          if-no-files-found: error
+          retention-days: 7
 
-    - name: Build Package
-      run: |
-        make clean
-        make
-        rm -f ./compiled/.gitkeep
-        VERSION=$(git describe --tags --abbrev=0)
-        cat extension.json | jq ".version |= \"$VERSION\"" > ./compiled/extension.json
-        cp LICENSE ./compiled/LICENSE
-        cd compiled
-        tar -czvf ../nanodump.tar.gz .
-      
-    - name: Sign Package
-      run: |
-        touch ~/minisign.key && chmod 600 ~/minisign.key
-        echo -e "${{ secrets.MINISIGN_PRIVATE_KEY }}" > ~/minisign.key
-        MANIFEST=$(cat ./compiled/extension.json | base64 -w 0)
-        bash -c "echo \"\" | ~/minisign -s ~/minisign.key -S -m ./nanodump.tar.gz -t \"$MANIFEST\" -x nanodump.minisig"
+  bof-e2e:
+    name: Test uploaded BOF in Sliver
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
 
-    - name: "Publish Release"
-      uses: "marvinpinto/action-automatic-releases@latest"
-      with:
-        repo_token: "${{ secrets.GITHUB_TOKEN }}"
-        prerelease: false
-        files: |
-          ./nanodump.minisig
-          ./nanodump.tar.gz
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Download unsigned build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: nanodump-unsigned
+          path: build
+
+      - name: Match tested object to package archive
+        env:
+          PACKAGE_VERSION: ${{ needs.build.outputs.version }}
+        shell: pwsh
+        run: |
+          python scripts/validate-armory-package.py `
+            --archive build/nanodump.tar.gz `
+            --version $env:PACKAGE_VERSION `
+            --expected-object build/nanodump.x64.o `
+            --expected-manifest build/extension.json
+
+      - name: Run session and beacon BOF tests
+        uses: sliverarmory/sliver-test-bof@b25b1175aa7595929aa847d89d27e645b96ebf99
+        with:
+          manifest: .github/sliver-bof-e2e.yml
+          target: windows/amd64
+
+      - name: Upload BOF test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nanodump-bof-e2e
+          path: .sliver-bof-e2e/results
+          if-no-files-found: warn
+          retention-days: 7
+
+  release:
+    name: Sign and publish Armory package
+    # Set this variable only after main, version tags, and this environment are protected.
+    if: github.repository == 'sliverarmory/nanodump' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.NANODUMP_RELEASE_ENABLED == 'true'
+    needs: [build, bof-e2e]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: write
+    concurrency:
+      group: nanodump-release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download tested unsigned build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: nanodump-unsigned
+          path: build
+
+      - name: Confirm version tag and main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" == tag ]]
+          [[ "$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{commit}")" == "$GITHUB_SHA" ]]
+          remote_tag_object="$(git ls-remote --exit-code origin "refs/tags/$GITHUB_REF_NAME" | cut -f1)"
+          remote_tag_commit="$(git ls-remote --exit-code origin "refs/tags/$GITHUB_REF_NAME^{}" | cut -f1)"
+          remote_main_commit="$(git ls-remote --exit-code origin refs/heads/main | cut -f1)"
+          [[ "$remote_tag_object" == "$(git rev-parse "refs/tags/$GITHUB_REF_NAME")" ]]
+          [[ "$remote_tag_commit" == "$GITHUB_SHA" ]]
+          [[ "$remote_main_commit" == "$GITHUB_SHA" ]]
+          tag_verification="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$remote_tag_object" \
+            --jq 'if (.verification.verified == true and .verification.reason == "valid") then "verified" else "invalid" end')"
+          [[ "$tag_verification" == verified ]]
+
+      - name: Install Minisign
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends minisign
+
+      - name: Validate unsigned release bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate-armory-package.py \
+            --archive build/nanodump.tar.gz \
+            --version "$GITHUB_REF_NAME" \
+            --expected-object build/nanodump.x64.o \
+            --expected-manifest build/extension.json
+
+      - name: Sign archive with the existing Armory key
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          key_file="$(mktemp "$RUNNER_TEMP/nanodump-minisign.XXXXXX")"
+          trap 'rm -f "$key_file"' EXIT
+          python3 - "$key_file" <<'PY'
+          import os
+          import sys
+
+          key = os.environ['MINISIGN_PRIVATE_KEY']
+          if not key:
+              raise SystemExit('missing signing key')
+          # The original workflow accepted literal backslash-n line separators.
+          if '\n' not in key and '\\n' in key:
+              key = key.replace('\\n', '\n')
+          with open(sys.argv[1], 'w', encoding='ascii') as output:
+              output.write(key.rstrip('\n') + '\n')
+          PY
+          unset MINISIGN_PRIVATE_KEY
+          trusted_manifest="$(base64 -w 0 build/extension.json)"
+          printf '\n' | minisign -S -s "$key_file" \
+            -m build/nanodump.tar.gz \
+            -x build/nanodump.minisig \
+            -t "$trusted_manifest"
+          minisign -Vm build/nanodump.tar.gz \
+            -x build/nanodump.minisig \
+            -P 'RWRftt+kvCADbGXc9qe8q1OAkGy5C8lWVrzUVoT3DCH0hJ6uCuzmc0fk' \
+            >/dev/null
+
+      - name: Validate signed package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate-armory-package.py \
+            --archive build/nanodump.tar.gz \
+            --version "$GITHUB_REF_NAME" \
+            --expected-object build/nanodump.x64.o \
+            --expected-manifest build/extension.json \
+            --signature build/nanodump.minisig \
+            --public-key 'RWRftt+kvCADbGXc9qe8q1OAkGy5C8lWVrzUVoT3DCH0hJ6uCuzmc0fk'
+
+      - name: Publish immutable version release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release already exists: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            build/nanodump.tar.gz#nanodump.tar.gz \
+            build/nanodump.minisig#nanodump.minisig \
+            --verify-tag \
+            --latest \
+            --title "NanoDump Armory $GITHUB_REF_NAME" \
+            --notes "Compatibility change: this release requires Sliver's built-in Reflektor BOF runner and does not install COFFLoader. The command now packs NanoDump's 19 upstream arguments instead of the previous four. Standard dumps default to disk output with a valid minidump signature; Sliver does not reconstruct NanoDump's Cobalt Strike fileless callbacks. The Windows/amd64 BOF was tested for LSASS PID discovery in session and beacon modes."

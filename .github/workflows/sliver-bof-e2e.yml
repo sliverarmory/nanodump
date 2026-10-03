@@ -1,0 +1,20 @@
+name: Sliver BOF end-to-end
+
+"on":
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bof-e2e:
+    uses: sliverarmory/sliver-test-bof/.github/workflows/e2e.yml@b25b1175aa7595929aa847d89d27e645b96ebf99
+    with:
+      manifest: .github/sliver-bof-e2e.yml
+      prepare-command: >-
+        sudo apt-get update &&
+        sudo apt-get install -y gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 &&
+        ./scripts/build-armory-bof.sh
