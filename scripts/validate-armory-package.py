@@ -64,6 +64,9 @@ def main():
         object_bytes = archive.extractfile("./nanodump.x64.o").read()
         license_bytes = archive.extractfile("./LICENSE").read()
 
+    trusted_comment_length = len("trusted comment: ") + len(base64.b64encode(manifest_bytes)) + 1
+    require(trusted_comment_length < 4096, "manifest exceeds Minisign trusted-comment line limit")
+
     manifest = json.loads(manifest_bytes)
     require(manifest.get("version") == args.version, "manifest version differs from tag")
     require(manifest.get("name") == "nanodump", "unexpected package name")
