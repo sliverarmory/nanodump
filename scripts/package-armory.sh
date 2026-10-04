@@ -23,7 +23,9 @@ from pathlib import Path
 
 manifest = json.loads(Path('extension.json').read_text())
 manifest['version'] = sys.argv[1]
-Path(sys.argv[2]).write_text(json.dumps(manifest, indent=2) + '\n')
+# Minisign's trusted comment includes this manifest as base64. Keep the
+# archive copy compact enough for its 4096-byte signature-line limit.
+Path(sys.argv[2]).write_text(json.dumps(manifest, separators=(',', ':')) + '\n')
 PY
 
 cp "$stage/extension.json" build/extension.json
