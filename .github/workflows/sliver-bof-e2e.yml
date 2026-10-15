@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   bof-e2e:
-    uses: sliverarmory/sliver-test-bof/.github/workflows/e2e.yml@b25b1175aa7595929aa847d89d27e645b96ebf99
+    uses: sliverarmory/sliver-test-bof/.github/workflows/e2e.yml@b38a09a226bf861a1e56e9dbe07838fe99138582
     with:
       manifest: .github/sliver-bof-e2e.yml
       prepare-command: >-
