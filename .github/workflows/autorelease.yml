@@ -100,7 +100,7 @@ jobs:
             --expected-manifest build/extension.json
 
       - name: Run session and beacon BOF tests
-        uses: sliverarmory/sliver-test-bof@b25b1175aa7595929aa847d89d27e645b96ebf99
+        uses: sliverarmory/sliver-test-bof@b38a09a226bf861a1e56e9dbe07838fe99138582
         with:
           manifest: .github/sliver-bof-e2e.yml
           target: windows/amd64
